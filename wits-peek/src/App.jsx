@@ -1,104 +1,162 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import axios from 'axios';
+import './App.css';
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [studentId, setStudentId] = useState(''); 
+  const [studentId, setStudentId] = useState('');
   const [password, setPassword] = useState('');
-  const [courses, setCourses] = useState([]);
-  
-  // New state to hold the actual student name from the server
   const [userName, setUserName] = useState('');
 
-  // 1. Handle the Live Login
+  const [enrollments, setEnrollments] = useState([]);
+  const [selectedTermIndex, setSelectedTermIndex] = useState(0);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
 
+    let token, internalId;
+
     try {
-      // Step A: Login to get the Token, internal ID, and User Info
-      const loginRes = await axios.post('/api/login', { 
-        username: studentId, 
-        password: password 
+      const loginRes = await axios.post('/api/login', {
+        studentId: studentId,
+        password: password
       });
 
-      // Extracting the token, internal studentId, and the userInfo object
-      const { token, studentId: internalId, userInfo } = loginRes.data;
+      token = loginRes.data.token;
+      internalId = loginRes.data.userInfo.studentId;
 
-      // Set the name dynamically from the login response
-      if (userInfo && userInfo.fullName) {
-        setUserName(userInfo.fullName);
+      if (loginRes.data.userInfo && loginRes.data.userInfo.fullName) {
+        setUserName(loginRes.data.userInfo.fullName);
       }
-
-      // Step B: Fetch real-time grades using that token
-      const gradesRes = await axios.get('/api/grades', { 
-        params: { studentId: internalId, token } 
-      });
-
-      const enrolledDetails = gradesRes.data.items.studentEnrollments[0].enrolledCourseGradeDetails;
-      
-      setCourses(enrolledDetails);
-      setIsLoggedIn(true);
     } catch (err) {
       alert("Login Failed: Please check your ID and Password.");
-      console.error(err);
+      console.error("Auth Error:", err);
+      setLoading(false);
+      return;
+    }
+
+    try {
+      // 1. Make sure it says /api/grades
+      const gradesRes = await axios.get('/api/grades', { 
+        // 2. Put the token back inside the params object
+        params: { studentId: internalId, token: token } 
+      });
+
+      const allEnrollments = gradesRes.data?.items?.studentEnrollments || [];
+
+      setEnrollments(allEnrollments);
+      setSelectedTermIndex(0);
+      setIsLoggedIn(true);
+    } catch (err) {
+      const errorMsg = err.response ? `Server returned ${err.response.status}` : err.message;
+      alert(`Sync Failed. Reason: ${errorMsg}`);
+      console.error("Grades Error:", err);
     } finally {
       setLoading(false);
     }
   };
 
-  // 2. Calculate GWA dynamically from live data
+  // --- OMNI-EXTRACTORS ---
+  const getYearStr = (enr) => {
+    return enr.schoolYear || enr.term?.schoolYear || enr.academicYear || enr.sy || "Academic Year";
+  };
+
+  const getSemStr = (enr) => {
+    // If the API returns the term as a direct string, catch it here
+    if (typeof enr.term === 'string') return enr.term;
+    return enr.semester || enr.semesterName || enr.termName || enr.term?.semester || enr.term?.semesterName || "Semester";
+  };
+
+  // The school API renames the array for past semesters. 
+  // This function finds ANY array inside the semester object that contains course data.
+  const getCourses = (enr) => {
+    if (!enr) return [];
+
+    // Check the current active semester format first
+    if (enr.enrolledCourseGradeDetails && enr.enrolledCourseGradeDetails.length > 0) {
+      return enr.enrolledCourseGradeDetails;
+    }
+
+    // Dynamic fallback for past semesters
+    for (const key in enr) {
+      if (Array.isArray(enr[key]) && enr[key].length > 0 && (enr[key][0].courseCode || enr[key][0].subjectCode)) {
+        return enr[key];
+      }
+    }
+
+    return [];
+  };
+
+  const activeEnrollment = enrollments[selectedTermIndex] || {};
+  const courses = getCourses(activeEnrollment);
+
   const calculateGWA = () => {
     let totalPoints = 0;
     let totalUnits = 0;
 
     courses.forEach(c => {
-      const grade = parseFloat(c.gradeDetailFinal?.grade || c.gradeDetails?.[0]?.grade);
-      const units = parseFloat(c.units);
+      const finalGrade = c.gradeDetailFinal?.grade;
 
-      if (!isNaN(grade) && !isNaN(units)) {
-        totalPoints += (grade * units);
-        totalUnits += units;
+      if (finalGrade) {
+        const grade = parseFloat(finalGrade);
+        const units = parseFloat(c.units);
+
+        if (!isNaN(grade) && !isNaN(units)) {
+          totalPoints += (grade * units);
+          totalUnits += units;
+        }
       }
     });
 
     return totalUnits > 0 ? (totalPoints / totalUnits).toFixed(2) : "0.00";
   };
 
+  const calculateTotalUnits = () => {
+    let total = 0;
+    courses.forEach(c => {
+      const units = parseFloat(c.units);
+      if (!isNaN(units)) total += units;
+    });
+    return total;
+  };
+
   if (!isLoggedIn) {
     return (
-      <div style={styles.loginPage}>
-        <div style={styles.loginCard}>
-          <div style={styles.logoCircle}>W</div>
-          <h1 style={styles.brandTitle}>WITS-PEEK</h1>
-          <p style={styles.brandSubtitle}>Student Portal Sync</p>
+      <div className="app-container">
+        <div className="cyber-card">
+          <div className="login-header">
+            <div className="logo-icon">W</div>
+            <h1 className="brand-title">WITS-PEEK</h1>
+            <p className="brand-subtitle">Alternate Grade Viewer</p>
+          </div>
 
           <form onSubmit={handleLogin}>
-            <div style={styles.inputGroup}>
-              <label style={styles.label}>STUDENT ID</label>
-              <input 
-                type="text" 
-                placeholder="XX-XXXX-XXX" 
-                style={styles.input} 
+            <div className="input-group">
+              <label className="input-label">Student ID</label>
+              <input
+                type="text"
+                placeholder="XX-XXXX-XXX"
+                className="cyber-input"
                 value={studentId}
                 onChange={(e) => setStudentId(e.target.value)}
                 required
               />
             </div>
-            <div style={styles.inputGroup}>
-              <label style={styles.label}>PASSWORD</label>
-              <input 
-                type="password" 
-                placeholder="••••••••" 
-                style={styles.input} 
+            <div className="input-group">
+              <label className="input-label">Password</label>
+              <input
+                type="password"
+                placeholder="••••••••"
+                className="cyber-input"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
               />
             </div>
-            <button type="submit" style={styles.button} disabled={loading}>
-              {loading ? "SYNCING..." : "ENTER DASHBOARD"}
+            <button type="submit" className="cyber-button" disabled={loading}>
+              {loading ? "AUTHENTICATING..." : "SIGN IN"}
             </button>
           </form>
         </div>
@@ -107,79 +165,122 @@ function App() {
   }
 
   return (
-    <div style={styles.dashboard}>
-      <header style={styles.header}>
-        <div>
-          <h2 style={{ margin: 0 }}>Teknoy Dashboard</h2>
-          {/* Displaying the dynamic name here */}
-          <small style={{ textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            {userName || "WELCOME TEKNOY"}
-          </small>
-        </div>
-        <div style={styles.gwaBox}>
-          <small>GWA</small>
-          <div style={{ fontSize: '24px', fontWeight: 'bold' }}>{calculateGWA()}</div>
-        </div>
-      </header>
+    <div className="app-root">
 
-      <div style={styles.tableCard}>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={styles.table}>
-            <thead>
-              <tr style={styles.tableHeader}>
-                <th style={styles.th}>CODE</th>
-                <th style={styles.th}>SUBJECT</th>
-                <th style={styles.th}>UNITS</th>
-                <th style={styles.th}>GRADE</th>
-              </tr>
-            </thead>
-            <tbody>
-              {courses.map((c, i) => (
-                <tr key={i} style={styles.row}>
-                  <td style={{ fontWeight: 'bold', color: '#8a353c', padding: '15px' }}>{c.courseCode}</td>
-                  <td style={{ padding: '15px' }}>{c.courseTitle}</td>
-                  <td style={{ textAlign: 'center', padding: '15px' }}>{c.units}</td>
-                  <td style={{ textAlign: 'center', fontWeight: 'bold', padding: '15px' }}>
-                    {c.gradeDetailFinal?.grade || c.gradeDetails?.[0]?.grade || (
-                      <span style={{ color: '#888', fontSize: '12px' }}>PENDING</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+      {/* Top Main Header */}
+      <header className="top-nav">
+        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+          <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 'bold' }}>{userName || "Student Dashboard"}</h2>
+          <span className="font-mono text-muted">ID: {studentId}</span>
         </div>
-      </div>
-      <div style={{ textAlign: 'center', marginTop: '20px' }}>
-        <button 
-          onClick={() => window.location.reload()} 
-          style={{ background: 'none', border: 'none', color: '#8a353c', cursor: 'pointer', textDecoration: 'underline' }}
+        <button
+          onClick={() => window.location.reload()}
+          className="logout-btn"
+          style={{ marginTop: 0 }}
         >
           Logout
         </button>
+      </header>
+
+      <div className="dashboard-layout">
+
+        {/* SIDEBAR: Academic History */}
+        <aside className="cyber-sidebar">
+          <h3 className="sidebar-title">Academic History</h3>
+          {enrollments.map((enr, i) => {
+            const isSelected = selectedTermIndex === i;
+            return (
+              <div
+                key={i}
+                onClick={() => setSelectedTermIndex(i)}
+                className={`sidebar-item ${isSelected ? 'selected' : ''}`}
+              >
+                <div className="sidebar-item-year">{getYearStr(enr)}</div>
+                <div className="sidebar-item-term">{getSemStr(enr)}</div>
+              </div>
+            );
+          })}
+        </aside>
+
+        {/* MAIN CONTENT AREA */}
+        <main className="main-content">
+
+          {/* Main Table Card */}
+          <div className="table-container">
+
+            {/* Table Header Area with Stats */}
+            <div className="dash-stats-row">
+              <div>
+                <h2 style={{ margin: '0 0 4px 0', fontSize: '18px', fontWeight: 'bold' }}>{getYearStr(activeEnrollment)}</h2>
+                <span className="font-mono text-muted">{getSemStr(activeEnrollment)}</span>
+              </div>
+              <div style={{ display: 'flex', gap: '15px' }}>
+                <div className="stat-box">
+                  GWA: {calculateGWA()}
+                </div>
+                <div className="stat-box">
+                  Units: {calculateTotalUnits()}
+                </div>
+              </div>
+            </div>
+
+            {/* Grades Table */}
+            <div style={{ overflowX: 'auto' }}>
+              <table className="cyber-table">
+                <thead>
+                  <tr>
+                    <th>CODE</th>
+                    <th>SUBJECT</th>
+                    <th style={{ textAlign: 'center' }}>UNITS</th>
+                    <th style={{ textAlign: 'center' }}>MIDTERM</th>
+                    <th style={{ textAlign: 'center' }}>FINAL</th>
+                    <th style={{ textAlign: 'center' }}>STATUS</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {courses.map((c, i) => {
+                    const midtermGrade = c.gradeDetails?.[0]?.grade;
+                    const finalGrade = c.gradeDetailFinal?.grade;
+
+                    let statusBadge = <span className="badge-pending">-</span>;
+                    if (finalGrade) {
+                      const numericGrade = parseFloat(finalGrade);
+                      if (numericGrade >= 3.0) {
+                        statusBadge = <span className="badge-pass">PASSED</span>;
+                      } else {
+                        statusBadge = <span className="badge-fail">FAILED</span>;
+                      }
+                    }
+
+                    return (
+                      <tr key={i}>
+                        <td className="col-code">{c.courseCode || c.subjectCode}</td>
+                        <td className="col-title">{c.courseTitle || c.subjectTitle}</td>
+                        <td className="col-units">{c.units}</td>
+
+                        <td className="col-grade" style={{ textAlign: 'center', color: 'var(--text-main)', fontWeight: '500' }}>
+                          {midtermGrade || <span style={{ color: 'var(--border-color)' }}>-</span>}
+                        </td>
+
+                        <td className="col-grade" style={{ textAlign: 'center' }}>
+                          {finalGrade ? <span className="grade-val">{finalGrade}</span> : <span style={{ color: 'var(--border-color)' }}>-</span>}
+                        </td>
+
+                        <td style={{ textAlign: 'center' }}>
+                          {statusBadge}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+        </main>
       </div>
     </div>
   );
 }
-
-const styles = {
-  loginPage: { height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#121212', fontFamily: 'sans-serif' },
-  loginCard: { backgroundColor: '#1e1e1e', padding: '40px', borderRadius: '20px', width: '90%', maxWidth: '380px', textAlign: 'center', boxShadow: '0 10px 30px rgba(0,0,0,0.5)' },
-  logoCircle: { width: '50px', height: '50px', backgroundColor: '#8a353c', borderRadius: '50%', margin: '0 auto 15px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 'bold' },
-  brandTitle: { color: 'white', margin: 0, fontSize: '24px', letterSpacing: '1px' },
-  brandSubtitle: { color: '#666', fontSize: '13px', marginBottom: '30px' },
-  inputGroup: { textAlign: 'left', marginBottom: '15px' },
-  label: { color: '#8a353c', fontSize: '10px', fontWeight: 'bold', marginBottom: '5px', display: 'block' },
-  input: { width: '100%', padding: '12px', borderRadius: '8px', border: '1px solid #333', backgroundColor: '#2d2d2d', color: 'white', boxSizing: 'border-box', outline: 'none' },
-  button: { width: '100%', padding: '14px', backgroundColor: '#8a353c', color: 'white', border: 'none', borderRadius: '8px', fontWeight: 'bold', cursor: 'pointer', marginTop: '10px' },
-  dashboard: { padding: '20px', maxWidth: '1000px', margin: '0 auto', fontFamily: 'sans-serif' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#8a353c', color: 'white', padding: '20px 30px', borderRadius: '15px', marginBottom: '30px', boxShadow: '0 4px 15px rgba(0,0,0,0.2)' },
-  gwaBox: { textAlign: 'right', borderLeft: '1px solid rgba(255,255,255,0.2)', paddingLeft: '20px' },
-  tableCard: { backgroundColor: 'white', borderRadius: '15px', overflow: 'hidden', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' },
-  table: { width: '100%', borderCollapse: 'collapse' },
-  tableHeader: { backgroundColor: '#222', color: 'white' },
-  th: { padding: '15px', textAlign: 'left', fontSize: '12px' },
-  row: { borderBottom: '1px solid #eee' }
-};
 
 export default App;

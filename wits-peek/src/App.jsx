@@ -64,13 +64,12 @@ function App() {
   };
 
   const getSemStr = (enr) => {
-    // If the API returns the term as a direct string, catch it here
+    // If the API returns the term as a direct string
     if (typeof enr.term === 'string') return enr.term;
     return enr.semester || enr.semesterName || enr.termName || enr.term?.semester || enr.term?.semesterName || "Semester";
   };
 
-  // The school API renames the array for past semesters. 
-  // This function finds ANY array inside the semester object that contains course data.
+  
   const getCourses = (enr) => {
     if (!enr) return [];
 

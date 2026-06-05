@@ -6,13 +6,13 @@ export default async function handler(req, res) {
     const { studentId, password } = req.body;
 
     try {
-        // Route the request to the working proxy
+       
         const response = await axios.post('https://altwits.vercel.app/api/login', {
-            studentId: studentId, // Altwits expects this key
+            studentId: studentId,
             password: password
         });
 
-        // Send their decrypted, working response back to your frontend
+       
         return res.status(200).json(response.data);
     } catch (error) {
         console.error("Altwits login error:", error.response?.data || error.message);

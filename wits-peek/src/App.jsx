@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import './App.css';
 
 function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [loading, setLoading] = useState(false);
+  
+  const [isRestoring, setIsRestoring] = useState(true); 
+
   const [studentId, setStudentId] = useState('');
   const [password, setPassword] = useState('');
   const [userName, setUserName] = useState('');
@@ -12,11 +15,45 @@ function App() {
   const [enrollments, setEnrollments] = useState([]);
   const [selectedTermIndex, setSelectedTermIndex] = useState(0);
 
+  useEffect(() => {
+    const checkSession = async () => {
+      const savedSession = localStorage.getItem('wits_session');
+      
+      if (!savedSession) {
+        setIsRestoring(false);
+        return;
+      }
+
+      try {
+        const { token, savedId, savedName } = JSON.parse(savedSession);
+
+        const gradesRes = await axios.get('/api/grades', {
+          params: { studentId: savedId, token: token }
+        });
+
+        const allEnrollments = gradesRes.data?.items?.studentEnrollments || [];
+        
+        setStudentId(savedId);
+        setUserName(savedName);
+        setEnrollments(allEnrollments);
+        setSelectedTermIndex(0);
+        setIsLoggedIn(true);
+      } catch (err) {
+        console.error("Session expired or invalid", err);
+        localStorage.removeItem('wits_session');
+      } finally {
+        setIsRestoring(false);
+      }
+    };
+    
+    checkSession();
+  }, []);
+
   const handleLogin = async (e) => {
     e.preventDefault();
     setLoading(true);
 
-    let token, internalId;
+    let token, internalId, fetchedName;
 
     try {
       const loginRes = await axios.post('/api/login', {
@@ -26,6 +63,7 @@ function App() {
 
       token = loginRes.data.token;
       internalId = loginRes.data.userInfo.studentId;
+      fetchedName = loginRes.data.userInfo?.fullName || "Student Dashboard";
 
       if (loginRes.data.userInfo && loginRes.data.userInfo.fullName) {
         setUserName(loginRes.data.userInfo.fullName);
@@ -38,13 +76,17 @@ function App() {
     }
 
     try {
-      // 1. Make sure it says /api/grades
       const gradesRes = await axios.get('/api/grades', { 
-        // 2. Put the token back inside the params object
         params: { studentId: internalId, token: token } 
       });
 
       const allEnrollments = gradesRes.data?.items?.studentEnrollments || [];
+
+      localStorage.setItem('wits_session', JSON.stringify({
+        token: token,
+        savedId: internalId,      
+        savedName: fetchedName
+      }));
 
       setEnrollments(allEnrollments);
       setSelectedTermIndex(0);
@@ -58,33 +100,25 @@ function App() {
     }
   };
 
-  // --- OMNI-EXTRACTORS ---
   const getYearStr = (enr) => {
     return enr.schoolYear || enr.term?.schoolYear || enr.academicYear || enr.sy || "Academic Year";
   };
 
   const getSemStr = (enr) => {
-    // If the API returns the term as a direct string
     if (typeof enr.term === 'string') return enr.term;
     return enr.semester || enr.semesterName || enr.termName || enr.term?.semester || enr.term?.semesterName || "Semester";
   };
 
-  
   const getCourses = (enr) => {
     if (!enr) return [];
-
-    // Check the current active semester format first
     if (enr.enrolledCourseGradeDetails && enr.enrolledCourseGradeDetails.length > 0) {
       return enr.enrolledCourseGradeDetails;
     }
-
-    // Dynamic fallback for past semesters
     for (const key in enr) {
       if (Array.isArray(enr[key]) && enr[key].length > 0 && (enr[key][0].courseCode || enr[key][0].subjectCode)) {
         return enr[key];
       }
     }
-
     return [];
   };
 
@@ -97,11 +131,9 @@ function App() {
 
     courses.forEach(c => {
       const finalGrade = c.gradeDetailFinal?.grade;
-
       if (finalGrade) {
         const grade = parseFloat(finalGrade);
         const units = parseFloat(c.units);
-
         if (!isNaN(grade) && !isNaN(units)) {
           totalPoints += (grade * units);
           totalUnits += units;
@@ -120,6 +152,23 @@ function App() {
     });
     return total;
   };
+
+  const handleLogout = () => {
+    localStorage.removeItem('wits_session');
+    window.location.reload();
+  };
+
+  if (isRestoring) {
+    return (
+      <div className="app-container">
+        <div className="cyber-card" style={{ textAlign: 'center', padding: '40px' }}>
+          <div className="logo-icon" style={{ margin: '0 auto 15px' }}>W</div>
+          <h2 style={{ color: 'white', letterSpacing: '2px', marginTop: '10px' }}>RESTORING SESSION...</h2>
+          <p className="brand-subtitle">{"Connecting to secure terminal (if it's taking too long, please refresh or login again)"}</p>          
+        </div>
+      </div>
+    );
+  }
 
   if (!isLoggedIn) {
     return (
@@ -173,7 +222,7 @@ function App() {
           <span className="font-mono text-muted">ID: {studentId}</span>
         </div>
         <button
-          onClick={() => window.location.reload()}
+          onClick={handleLogout}
           className="logout-btn"
           style={{ marginTop: 0 }}
         >
